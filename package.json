@@ -1,0 +1,36 @@
+{
+  "name": "waterline",
+  "productName": "Waterline",
+  "version": "1.0.0",
+  "description": "A minimal personal logbook.",
+  "author": "Devlin",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "net.rabasso.waterline",
+    "productName": "Waterline",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.lifestyle",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    }
+  }
+}
