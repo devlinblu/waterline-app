@@ -3,6 +3,7 @@
   const ACCENT = '#2F6B7A';
   const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const NO_ENTRY = '(No entry written yet.)';
 
   const KINDS_META = [
     { key: 'Place', varName: '--kind-place' },
@@ -18,6 +19,7 @@
   const state = {
     view: 'list', // 'list' | 'post' | 'compose'
     postId: null,
+    editingId: null, // set when compose view is editing an existing entry
     query: '',
     group: 'date', // 'date' | 'place'
     searchOpen: false,
@@ -43,6 +45,11 @@
       .replace(/'/g, '&#39;');
   }
 
+  function isoFromS(s) {
+    const str = String(s == null ? '' : s).padStart(8, '0');
+    return str.slice(0, 4) + '-' + str.slice(4, 6) + '-' + str.slice(6, 8);
+  }
+
   function buildPost(d) {
     const iso = d.date || new Date().toISOString().slice(0, 10);
     const parts = iso.split('-');
@@ -50,22 +57,38 @@
     const mi = Math.max(0, Math.min(11, parseInt(m, 10) - 1));
     const day = parseInt(dd, 10) || 1;
     const bodyText = (d.body || '').trim();
-    const paras = bodyText ? bodyText.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean) : ['(No entry written yet.)'];
+    const paras = bodyText ? bodyText.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean) : [NO_ENTRY];
     const words = bodyText.split(/\s+/).filter(Boolean).length;
     const first = paras[0];
     return {
       id: 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
       s: Number(y + m + dd),
+      iso: iso,
       dOM: String(day).padStart(2, '0') + ' ' + MONTHS_SHORT[mi],
       year: y,
       dateLabel: MONTHS_LONG[mi] + ' ' + day + ', ' + y,
       read: Math.max(1, Math.round(words / 200)),
       topic: (d.topic || '').trim(),
       location: (d.location || '').trim() || 'Vancouver',
-      title: d.title.trim(),
+      title: (d.title || '').trim(),
       excerpt: first.length > 120 ? first.slice(0, 117) + '…' : first,
       body: paras,
       book: (d.book || '').trim(),
+    };
+  }
+
+  // Reconstruct an editable draft from a stored post (which holds derived fields).
+  function draftFromPost(p) {
+    const bodyText = Array.isArray(p.body)
+      ? (p.body.length === 1 && p.body[0] === NO_ENTRY ? '' : p.body.join('\n\n'))
+      : (p.body || '');
+    return {
+      date: p.iso || isoFromS(p.s),
+      title: p.title || '',
+      topic: p.topic || '',
+      location: p.location || '',
+      book: p.book || '',
+      body: bodyText,
     };
   }
 
@@ -88,22 +111,50 @@
   }
 
   function openCompose() {
-    setState({ view: 'compose', draft: blankDraft() });
+    setState({ view: 'compose', editingId: null, draft: blankDraft() });
     scrollTop();
   }
 
-  function updateDraft(field, val) {
-    state.draft = { ...state.draft, [field]: val };
-    rerender();
+  function openEdit(id) {
+    const p = state.posts.find((x) => x.id === id);
+    if (!p) return;
+    setState({ view: 'compose', editingId: id, draft: draftFromPost(p) });
+    scrollTop();
+  }
+
+  function cancelEdit() {
+    const id = state.editingId;
+    setState({ view: id ? 'post' : 'list', postId: id, editingId: null, draft: blankDraft() });
+    scrollTop();
+  }
+
+  function deletePost(id) {
+    const p = state.posts.find((x) => x.id === id);
+    if (!p) return;
+    const ok = window.confirm('Delete this entry? This can\u2019t be undone.\n\n\u201C' + (p.title || 'Untitled') + '\u201D');
+    if (!ok) return;
+    state.posts = state.posts.filter((x) => x.id !== id);
+    persist();
+    setState({ view: 'list', postId: null, editingId: null });
+    scrollTop();
   }
 
   function saveEntry() {
     const d = state.draft;
-    if (!d.title || !d.title.trim()) return;
+    if (!d.title || !d.title.trim()) {
+      const t = APP.querySelector('[data-focus-id="draft-title"]');
+      if (t) t.focus();
+      return;
+    }
     const post = buildPost(d);
-    state.posts = [post, ...state.posts];
+    if (state.editingId) {
+      post.id = state.editingId;
+      state.posts = state.posts.map((p) => (p.id === state.editingId ? post : p));
+    } else {
+      state.posts = [post, ...state.posts];
+    }
     persist();
-    setState({ view: 'post', postId: post.id, draft: blankDraft() });
+    setState({ view: 'post', postId: post.id, editingId: null, draft: blankDraft() });
     scrollTop();
   }
 
@@ -209,14 +260,12 @@
     `;
   }
 
-  // ---------- Render: list view ----------
-  function renderListView(vals) {
-    const wavePath = wave(1560, 3, 120, 11);
-    const wavePath2 = wave(1600, 2, 160, 12);
-
+  // ---------- Render: search dynamic region (count + dropdown) ----------
+  function renderSearchDynamic(vals) {
+    const countHtml = vals.showCount ? `<div class="result-count">${vals.resultCount} MATCHING</div>` : '';
     const dropdownHtml = vals.showDropdown ? `
       <div class="dropdown">
-        ${vals.matches.map((m, i) => `
+        ${vals.matches.map((m) => `
           <div class="dropdown-item" data-action="selectSuggestion" data-value="${escapeHtml(m.value)}">
             <span class="dropdown-kind" style="color:var(${m.varName});">${escapeHtml(m.kindLabel)}:</span>
             <span class="dropdown-value" style="color:var(${m.varName});">${escapeHtml(m.value)}</span>
@@ -224,13 +273,11 @@
         `).join('')}
       </div>
     ` : '';
+    return countHtml + dropdownHtml;
+  }
 
-    const countHtml = vals.showCount ? `<div class="result-count">${vals.resultCount} MATCHING</div>` : '';
-
-    const groupBtn = (key, label) => `
-      <button class="group-btn ${state.group === key ? 'active' : ''}" data-action="setGroup" data-group="${key}">${label}</button>
-    `;
-
+  // ---------- Render: sections list ----------
+  function renderSections(vals) {
     const sectionsHtml = vals.sections.map((section) => `
       <section class="section">
         <div class="section-header">
@@ -262,6 +309,18 @@
       ? `<div class="empty-state">Your logbook is empty. Click <strong>+&nbsp;New&nbsp;entry</strong> above to write your first one.</div>`
       : '';
 
+    return sectionsHtml + emptyHtml;
+  }
+
+  // ---------- Render: list view ----------
+  function renderListView(vals) {
+    const wavePath = wave(1560, 3, 120, 11);
+    const wavePath2 = wave(1600, 2, 160, 12);
+
+    const groupBtn = (key, label) => `
+      <button class="group-btn ${state.group === key ? 'active' : ''}" data-action="setGroup" data-group="${key}">${label}</button>
+    `;
+
     return `
       <div>
         <div class="waterline-wrap">
@@ -279,8 +338,7 @@
               <span class="search-icon">&#8981;</span>
               <input type="text" class="search-input" data-focus-id="search" value="${escapeHtml(state.query)}" placeholder="Search dates, places, topics, a book&hellip;" data-input="query" data-focusaction="query" />
             </div>
-            ${countHtml}
-            ${dropdownHtml}
+            <div class="search-dynamic">${renderSearchDynamic(vals)}</div>
           </div>
           <div class="groupby">
             <span class="groupby-label">Group by</span>
@@ -291,10 +349,7 @@
           </div>
         </div>
 
-        <div class="sections">
-          ${sectionsHtml}
-          ${emptyHtml}
-        </div>
+        <div class="sections">${renderSections(vals)}</div>
 
         <footer class="site-footer">
           <span>${vals.postCount} ENTRIES</span>
@@ -314,7 +369,14 @@
     const hasBook = !!cur.book;
     return `
       <article class="post-view">
-        <button class="back-btn" data-action="goList">&larr; Index</button>
+        <div class="post-topbar">
+          <button class="back-btn" data-action="goList">&larr; Index</button>
+          <div class="post-actions">
+            <button class="post-action-btn" data-action="editPost" data-id="${escapeHtml(cur.id)}">Edit</button>
+            <span class="post-action-sep">&middot;</span>
+            <button class="post-action-btn post-action-danger" data-action="deletePost" data-id="${escapeHtml(cur.id)}">Delete</button>
+          </div>
+        </div>
 
         <div class="post-meta-row">
           ${hasTopic ? `<span>${escapeHtml(cur.topic)}</span><span class="sep">/</span>` : ''}
@@ -345,10 +407,11 @@
   // ---------- Render: compose view ----------
   function renderComposeView() {
     const d = state.draft;
+    const editing = !!state.editingId;
     return `
       <article class="compose-view">
         <button class="back-btn" data-action="goList">&larr; Index</button>
-        <div class="compose-label">New log entry</div>
+        <div class="compose-label">${editing ? 'Edit entry' : 'New log entry'}</div>
 
         <input class="compose-title-input" data-focus-id="draft-title" data-input="draft.title" value="${escapeHtml(d.title)}" placeholder="Title" />
 
@@ -377,8 +440,8 @@
         <textarea class="compose-textarea" data-focus-id="draft-body" data-input="draft.body" placeholder="Write the entry&hellip;  (leave a blank line to start a new paragraph)">${escapeHtml(d.body)}</textarea>
 
         <div class="compose-actions">
-          <button class="btn-save" data-action="saveEntry">Save entry</button>
-          <button class="btn-cancel" data-action="goList">Cancel</button>
+          <button class="btn-save" data-action="saveEntry">${editing ? 'Save changes' : 'Save entry'}</button>
+          <button class="btn-cancel" data-action="${editing ? 'cancelEdit' : 'goList'}">Cancel</button>
         </div>
       </article>
     `;
@@ -394,47 +457,77 @@
     return `<div class="app-shell">${renderHeader()}${body}</div>`;
   }
 
-  function attachListeners() {
-    APP.querySelectorAll('[data-action]').forEach((el) => {
-      const action = el.dataset.action;
-      const evt = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? null : 'click';
-      if (!evt) return;
-      el.addEventListener('click', (e) => {
-        switch (action) {
-          case 'goList': return goList();
-          case 'openCompose': return openCompose();
-          case 'openPost': return openPost(el.dataset.id);
-          case 'goToLocation': return goToLocation(el.dataset.value);
-          case 'selectSuggestion': return selectSuggestion(el.dataset.value);
-          case 'setGroup': return setState({ group: el.dataset.group });
-          case 'saveEntry': return saveEntry();
-          default: return;
-        }
-      });
-      if (action === 'selectSuggestion') {
-        // use mousedown so it fires before the search input's blur handler closes the dropdown
-        el.addEventListener('mousedown', (e) => e.preventDefault());
+  // Update only the search-dependent regions, leaving the search input (and its
+  // focus/cursor) untouched. Used on every keystroke so we never rebuild the
+  // whole DOM while typing.
+  function updateSearchRegion() {
+    const vals = computeVals();
+    const dyn = APP.querySelector('.search-dynamic');
+    if (dyn) dyn.innerHTML = renderSearchDynamic(vals);
+    const sec = APP.querySelector('.sections');
+    if (sec) sec.innerHTML = renderSections(vals);
+  }
+
+  function handleAction(action, el) {
+    switch (action) {
+      case 'goList': return goList();
+      case 'openCompose': return openCompose();
+      case 'openPost': return openPost(el.dataset.id);
+      case 'editPost': return openEdit(el.dataset.id);
+      case 'deletePost': return deletePost(el.dataset.id);
+      case 'goToLocation': return goToLocation(el.dataset.value);
+      case 'selectSuggestion': return selectSuggestion(el.dataset.value);
+      case 'setGroup': return setState({ group: el.dataset.group });
+      case 'saveEntry': return saveEntry();
+      case 'cancelEdit': return cancelEdit();
+      default: return;
+    }
+  }
+
+  // Listeners are bound ONCE on the container. Because they live on APP (which is
+  // never destroyed), re-rendering inner HTML never orphans or double-binds them.
+  function setupDelegation() {
+    APP.addEventListener('click', (e) => {
+      const el = e.target.closest('[data-action]');
+      if (!el || !APP.contains(el)) return;
+      handleAction(el.dataset.action, el);
+    });
+
+    // Fire before the search input's blur so selecting a suggestion isn't
+    // pre-empted by the dropdown being torn down.
+    APP.addEventListener('mousedown', (e) => {
+      const el = e.target.closest('[data-action="selectSuggestion"]');
+      if (el) e.preventDefault();
+    });
+
+    APP.addEventListener('input', (e) => {
+      const el = e.target.closest('[data-input]');
+      if (!el) return;
+      const path = el.dataset.input;
+      if (path === 'query') {
+        state.query = el.value;
+        state.searchOpen = true;
+        updateSearchRegion();
+      } else if (path.indexOf('draft.') === 0) {
+        // No re-render: the input already holds the value; nothing else on
+        // screen depends on it live. This is what kills the compose blink.
+        state.draft[path.slice(6)] = el.value;
       }
     });
 
-    APP.querySelectorAll('[data-input]').forEach((el) => {
-      el.addEventListener('input', (e) => {
-        const path = el.dataset.input;
-        if (path === 'query') {
-          state.query = e.target.value;
-          state.searchOpen = true;
-          rerender();
-        } else if (path.startsWith('draft.')) {
-          updateDraft(path.slice('draft.'.length), e.target.value);
-        }
-      });
+    APP.addEventListener('focusin', (e) => {
+      if (e.target.matches && e.target.matches('[data-focusaction="query"]')) {
+        state.searchOpen = true;
+        updateSearchRegion();
+      }
     });
 
-    const searchInput = APP.querySelector('[data-focusaction="query"]');
-    if (searchInput) {
-      searchInput.addEventListener('focus', () => { state.searchOpen = true; rerender(); });
-      searchInput.addEventListener('blur', () => { state.searchOpen = false; rerender(); });
-    }
+    APP.addEventListener('focusout', (e) => {
+      if (e.target.matches && e.target.matches('[data-focusaction="query"]')) {
+        state.searchOpen = false;
+        updateSearchRegion();
+      }
+    });
   }
 
   function rerender() {
@@ -449,7 +542,6 @@
     }
 
     APP.innerHTML = buildHtml();
-    attachListeners();
 
     if (focusInfo) {
       const el = APP.querySelector(`[data-focus-id="${focusInfo.id}"]`);
@@ -462,5 +554,6 @@
     }
   }
 
+  setupDelegation();
   init();
 })();

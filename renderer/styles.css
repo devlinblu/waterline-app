@@ -597,3 +597,43 @@ button, input, textarea { font: inherit; }
   padding: 0;
   cursor: pointer;
 }
+
+/* ---------- Post view: edit / delete actions ---------- */
+.post-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 36px;
+}
+.post-topbar .back-btn {
+  margin-bottom: 0;
+}
+.post-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.post-action-btn {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mutedest);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: color .18s ease, border-color .18s ease;
+}
+.post-action-btn:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.post-action-danger:hover {
+  color: #A2432F;
+  border-bottom-color: #A2432F;
+}
+.post-action-sep {
+  color: var(--text-quietest);
+}
